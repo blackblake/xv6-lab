@@ -24,6 +24,25 @@ char* sbrk(int);
 int sleep(int);
 int uptime(void);
 
+// custom structs
+struct procinfo {
+    int pid;
+    int ppid;
+    int state;
+    uint sz;
+    char name[16];
+};
+
+// custom syscalls
+int getprocinfo(struct procinfo*);
+
+struct systime {
+    uint ticks;
+    uint uptime; // seconds
+};
+int getsystime(struct systime*);
+int setpriority(int pid, int priority);
+
 // ulib.c
 int stat(const char*, struct stat*);
 char* strcpy(char*, const char*);

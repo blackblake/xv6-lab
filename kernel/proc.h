@@ -82,6 +82,27 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+// Process type for multilevel queue scheduling
+enum proctype { 
+  SYSTEM_PROCESS = 0,    // 系统进程
+  INTERACTIVE_PROCESS,   // 交互进程  
+  BATCH_PROCESS         // 批处理进程
+};
+
+// Round Robin Queue structure for time slice scheduling
+typedef struct {
+  struct proc* queue[NPROC];
+  int front, rear;
+  int time_quantum; // 时间片大小
+} RoundRobinQueue;
+
+// Multi-level Queue structure for multilevel queue scheduling
+typedef struct {
+  RoundRobinQueue high_priority;   // 系统进程队列
+  RoundRobinQueue medium_priority; // 交互进程队列
+  RoundRobinQueue low_priority;    // 批处理进程队列
+} MultiLevelQueue;
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -105,4 +126,27 @@ struct proc {
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory
   char name[16];               // Process name (debugging)
+  int priority;                // Process priority (custom)
+  int wait_time;               // Wait time for aging (custom)
+  int remaining_time;          // Remaining time slice for round robin
+  enum proctype proc_type;     // Process type for multilevel queue
+  int queue_level;             // Current queue level (0=high, 1=medium, 2=low)
 };
+
+// Round Robin Queue operation functions
+void enqueue(RoundRobinQueue* rq, struct proc* p);
+struct proc* dequeue(RoundRobinQueue* rq);
+int is_empty(RoundRobinQueue* rq);
+void init_queue(RoundRobinQueue* rq, int quantum);
+
+// Round Robin scheduling algorithm
+void round_robin_schedule(struct proc processes[], int n, int quantum);
+
+// Multi-level Queue operation functions
+void init_multilevel_queue(MultiLevelQueue* mlq);
+void enqueue_to_level(MultiLevelQueue* mlq, struct proc* p, int level);
+struct proc* dequeue_from_level(MultiLevelQueue* mlq, int level);
+struct proc* schedule_from_multilevel(MultiLevelQueue* mlq);
+void classify_process(struct proc* p);
+void migrate_process(MultiLevelQueue* mlq, struct proc* p, int from_level, int to_level);
+void multilevel_queue_schedule(struct proc processes[], int n);

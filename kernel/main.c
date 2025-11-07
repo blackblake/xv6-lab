@@ -3,6 +3,13 @@
 #include "memlayout.h"
 #include "riscv.h"
 #include "defs.h"
+#ifdef USE_COLOR
+#define FG_GREEN "\x1b[1;32m"
+#define FG_RESET "\x1b[0m"
+#else
+#define FG_GREEN ""
+#define FG_RESET ""
+#endif
 
 volatile static int started = 0;
 
@@ -13,6 +20,24 @@ main()
   if(cpuid() == 0){
     consoleinit();
     printfinit();
+    if (cpuid() == 0) {
+      printf("\x1b[1;32m\n");
+      printf("=============================================\n");
+      printf("   Welcome to xv6-riscv (Customized Boot)   \n");
+      printf("=============================================\n\x1b[0m");
+    }
+    extern char end[];        // 链接脚本导出的内核末尾
+    uint64 total = PHYSTOP - KERNBASE;
+    uint64 used  = (uint64)end - KERNBASE;
+    uint64 free  = total - used;
+
+  
+  int total_kb = (int)(total/1024);
+  int used_kb  = (int)(used/1024);
+  int free_kb  = (int)(free/1024);
+  printf("Memory: total=%d KB, used=%d KB, free=%d KB\n", total_kb, used_kb, free_kb);
+    printf("CPU: cpuid=%d, NCPU(max)=%d\n", cpuid(), NCPU);
+
     printf("\n");
     printf("xv6 kernel is booting\n");
     printf("\n");

@@ -104,6 +104,9 @@ extern uint64 sys_unlink(void);
 extern uint64 sys_wait(void);
 extern uint64 sys_write(void);
 extern uint64 sys_uptime(void);
+extern uint64 sys_getprocinfo(void);
+extern uint64 sys_getsystime(void);
+extern uint64 sys_setpriority(void);
 
 static uint64 (*syscalls[])(void) = {
 [SYS_fork]    sys_fork,
@@ -127,6 +130,9 @@ static uint64 (*syscalls[])(void) = {
 [SYS_link]    sys_link,
 [SYS_mkdir]   sys_mkdir,
 [SYS_close]   sys_close,
+[SYS_getprocinfo] sys_getprocinfo,
+[SYS_getsystime]  sys_getsystime,
+[SYS_setpriority] sys_setpriority,
 };
 
 void

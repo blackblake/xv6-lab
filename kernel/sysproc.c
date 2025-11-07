@@ -7,6 +7,23 @@
 #include "spinlock.h"
 #include "proc.h"
 
+// 引用进程表
+extern struct proc proc[NPROC];
+
+// 在内核侧定义与用户态 struct procinfo 相同布局的结构，避免包含 user 头文件
+struct kprocinfo {
+  int pid;
+  int ppid;
+  int state;
+  uint sz;
+  char name[16];
+};
+
+struct ksystime {
+  uint ticks;
+  uint uptime;
+};
+
 uint64
 sys_exit(void)
 {
@@ -74,6 +91,48 @@ sys_sleep(void)
 }
 
 uint64
+sys_getsystime(void)
+{
+  struct systime *time;
+  if(argaddr(0, (uint64*)&time) < 0)
+    return -1;
+  if(time == 0)
+    return -1;
+
+  struct ksystime kt;
+  acquire(&tickslock);
+  kt.ticks = ticks;
+  kt.uptime = ticks / 100; // 假设100 ticks = 1秒
+  release(&tickslock);
+
+  if(copyout(myproc()->pagetable, (uint64)time, (char*)&kt, sizeof(kt)) < 0)
+    return -1;
+  return 0;
+}
+
+uint64
+sys_setpriority(void)
+{
+  int pid, prio;
+  if(argint(0, &pid) < 0 || argint(1, &prio) < 0)
+    return -1;
+  if(prio < 0 || prio > 10)
+    return -1;
+
+  struct proc *p;
+  for(p = proc; p < &proc[NPROC]; p++){
+    acquire(&p->lock);
+    if(p->pid == pid){
+      p->priority = prio;
+      release(&p->lock);
+      return 0;
+    }
+    release(&p->lock);
+  }
+  return -1;
+}
+
+uint64
 sys_kill(void)
 {
   int pid;
@@ -94,4 +153,30 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_getprocinfo(void)
+{
+  struct procinfo *info;
+  struct proc *p = myproc();
+  if(argaddr(0, (uint64*)&info) < 0)
+    return -1;
+  if(info == 0)
+    return -1;
+
+  // 填充信息
+  // 注意：procinfo 定义在 user/user.h，字段与内核结构对应
+  // 这里直接写用户空间指针是不安全的，需使用 copyout
+  struct kprocinfo kinfo;
+  kinfo.pid = p->pid;
+  kinfo.ppid = p->parent ? p->parent->pid : 0;
+  kinfo.state = p->state;
+  kinfo.sz = p->sz;
+  safestrcpy(kinfo.name, p->name, sizeof(kinfo.name));
+
+  if(copyout(p->pagetable, (uint64)info, (char *)&kinfo, sizeof(kinfo)) < 0)
+    return -1;
+
+  return 0;
 }

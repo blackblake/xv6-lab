@@ -119,6 +119,11 @@ allocproc(void)
 found:
   p->pid = allocpid();
   p->state = USED;
+  p->priority = 15;  // 默认优先级为15（中等优先级）
+  p->wait_time = 0;  // 初始化等待时间
+  p->remaining_time = 0;  // 初始化剩余时间片
+  p->proc_type = BATCH_PROCESS;  // 默认为批处理进程
+  p->queue_level = 2;  // 默认为低优先级队列
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -164,6 +169,8 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+  p->priority = 0;
+  p->remaining_time = 0;
 }
 
 // Create a user page table for a given process,
@@ -427,39 +434,46 @@ wait(uint64 addr)
   }
 }
 
-// Per-CPU process scheduler.
-// Each CPU calls scheduler() after setting itself up.
-// Scheduler never returns.  It loops, doing:
-//  - choose a process to run.
-//  - swtch to start running that process.
-//  - eventually that process transfers control
-//    via swtch back to the scheduler.
+// Simple priority scheduler
 void
 scheduler(void)
 {
   struct proc *p;
   struct cpu *c = mycpu();
+  struct proc *selected = 0;
+  int highest_priority = 1000; // Start with a high number
   
   c->proc = 0;
   for(;;){
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
 
+    // Find the process with highest priority (lowest number)
+    selected = 0;
+    highest_priority = 1000;
+    
     for(p = proc; p < &proc[NPROC]; p++) {
       acquire(&p->lock);
-      if(p->state == RUNNABLE) {
-        // Switch to chosen process.  It is the process's job
-        // to release its lock and then reacquire it
-        // before jumping back to us.
-        p->state = RUNNING;
-        c->proc = p;
-        swtch(&c->context, &p->context);
-
-        // Process is done running for now.
-        // It should have changed its p->state before coming back.
-        c->proc = 0;
+      if(p->state == RUNNABLE && p->priority < highest_priority) {
+        if(selected != 0) {
+          release(&selected->lock);
+        }
+        selected = p;
+        highest_priority = p->priority;
+      } else {
+        release(&p->lock);
       }
-      release(&p->lock);
+    }
+    
+    if(selected != 0) {
+      // Switch to chosen process
+      selected->state = RUNNING;
+      c->proc = selected;
+      swtch(&c->context, &selected->context);
+
+      // Process is done running for now
+      c->proc = 0;
+      release(&selected->lock);
     }
   }
 }
@@ -653,4 +667,273 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+// ==================== Round Robin Queue Operations ====================
+
+// Initialize the round robin queue
+void
+init_queue(RoundRobinQueue* rq, int quantum)
+{
+  rq->front = 0;
+  rq->rear = 0;
+  rq->time_quantum = quantum;
+}
+
+// Check if the queue is empty
+int
+is_empty(RoundRobinQueue* rq)
+{
+  return rq->front == rq->rear;
+}
+
+// Add a process to the round robin queue
+void
+enqueue(RoundRobinQueue* rq, struct proc* p)
+{
+  if((rq->rear + 1) % NPROC == rq->front) {
+    // Queue is full
+    return;
+  }
+  
+  rq->queue[rq->rear] = p;
+  rq->rear = (rq->rear + 1) % NPROC;
+}
+
+// Remove and return a process from the round robin queue
+struct proc*
+dequeue(RoundRobinQueue* rq)
+{
+  if(is_empty(rq)) {
+    return 0; // Queue is empty
+  }
+  
+  struct proc* p = rq->queue[rq->front];
+  rq->front = (rq->front + 1) % NPROC;
+  return p;
+}
+
+// Round Robin scheduling algorithm implementation
+void
+round_robin_schedule(struct proc processes[], int n, int quantum)
+{
+  RoundRobinQueue rq;
+  init_queue(&rq, quantum);
+  
+  // Add all processes to the queue
+  for(int i = 0; i < n; i++) {
+    if(processes[i].state == RUNNABLE) {
+      processes[i].remaining_time = quantum;
+      enqueue(&rq, &processes[i]);
+    }
+  }
+  
+  printf("Round Robin Scheduling with quantum %d:\n", quantum);
+  
+  while(!is_empty(&rq)) {
+    struct proc* current = dequeue(&rq);
+    if(current == 0) break;
+    
+    printf("Process %d running for time slice %d\n", current->pid, current->remaining_time);
+    
+    // Simulate process execution
+    // In real implementation, this would be handled by the scheduler
+    current->remaining_time = 0;
+    current->state = RUNNABLE;
+    
+    // If process still needs CPU time, add it back to queue
+    // This is a simplified version - in reality, we'd check if process is still runnable
+    if(current->state == RUNNABLE) {
+      current->remaining_time = quantum;
+      enqueue(&rq, current);
+    }
+  }
+}
+
+// ==================== Multi-level Queue Operations ====================
+
+// Initialize the multilevel queue
+void
+init_multilevel_queue(MultiLevelQueue* mlq)
+{
+  // Initialize each queue with different time quantums
+  init_queue(&mlq->high_priority, 2);    // 系统进程：短时间片
+  init_queue(&mlq->medium_priority, 4);  // 交互进程：中等时间片
+  init_queue(&mlq->low_priority, 8);     // 批处理进程：长时间片
+}
+
+// Add a process to a specific queue level
+void
+enqueue_to_level(MultiLevelQueue* mlq, struct proc* p, int level)
+{
+  switch(level) {
+    case 0: // High priority queue
+      enqueue(&mlq->high_priority, p);
+      p->queue_level = 0;
+      break;
+    case 1: // Medium priority queue
+      enqueue(&mlq->medium_priority, p);
+      p->queue_level = 1;
+      break;
+    case 2: // Low priority queue
+      enqueue(&mlq->low_priority, p);
+      p->queue_level = 2;
+      break;
+    default:
+      // Default to low priority
+      enqueue(&mlq->low_priority, p);
+      p->queue_level = 2;
+      break;
+  }
+}
+
+// Remove and return a process from a specific queue level
+struct proc*
+dequeue_from_level(MultiLevelQueue* mlq, int level)
+{
+  struct proc* p = 0;
+  switch(level) {
+    case 0: // High priority queue
+      p = dequeue(&mlq->high_priority);
+      break;
+    case 1: // Medium priority queue
+      p = dequeue(&mlq->medium_priority);
+      break;
+    case 2: // Low priority queue
+      p = dequeue(&mlq->low_priority);
+      break;
+  }
+  return p;
+}
+
+// Schedule a process from the multilevel queue (priority-based)
+struct proc*
+schedule_from_multilevel(MultiLevelQueue* mlq)
+{
+  struct proc* p = 0;
+  
+  // Check high priority queue first
+  if(!is_empty(&mlq->high_priority)) {
+    p = dequeue_from_level(mlq, 0);
+    if(p) return p;
+  }
+  
+  // Check medium priority queue
+  if(!is_empty(&mlq->medium_priority)) {
+    p = dequeue_from_level(mlq, 1);
+    if(p) return p;
+  }
+  
+  // Check low priority queue
+  if(!is_empty(&mlq->low_priority)) {
+    p = dequeue_from_level(mlq, 2);
+    if(p) return p;
+  }
+  
+  return 0; // No process available
+}
+
+// Classify a process based on its characteristics
+void
+classify_process(struct proc* p)
+{
+  // Simple classification based on process name and characteristics
+  if(strncmp(p->name, "init", 4) == 0 || strncmp(p->name, "sh", 2) == 0) {
+    p->proc_type = SYSTEM_PROCESS;
+  } else if(strncmp(p->name, "hello", 5) == 0 || strncmp(p->name, "echo", 4) == 0) {
+    p->proc_type = INTERACTIVE_PROCESS;
+  } else {
+    p->proc_type = BATCH_PROCESS;
+  }
+}
+
+// Migrate a process between queue levels
+void
+migrate_process(MultiLevelQueue* mlq, struct proc* p, int from_level, int to_level)
+{
+  if(from_level == to_level) return;
+  
+  // Remove from old queue (if it exists)
+  // Note: In a real implementation, we'd need to search and remove
+  // For simplicity, we assume the process is already dequeued
+  
+  // Add to new queue
+  enqueue_to_level(mlq, p, to_level);
+  
+  printf("Process %d migrated from level %d to level %d\n", 
+         p->pid, from_level, to_level);
+}
+
+// Multilevel queue scheduling algorithm
+void
+multilevel_queue_schedule(struct proc processes[], int n)
+{
+  MultiLevelQueue mlq;
+  init_multilevel_queue(&mlq);
+  
+  // Classify and add all processes to appropriate queues
+  for(int i = 0; i < n; i++) {
+    if(processes[i].state == RUNNABLE) {
+      classify_process(&processes[i]);
+      
+      switch(processes[i].proc_type) {
+        case SYSTEM_PROCESS:
+          enqueue_to_level(&mlq, &processes[i], 0);
+          break;
+        case INTERACTIVE_PROCESS:
+          enqueue_to_level(&mlq, &processes[i], 1);
+          break;
+        case BATCH_PROCESS:
+          enqueue_to_level(&mlq, &processes[i], 2);
+          break;
+      }
+    }
+  }
+  
+  printf("多级队列调度算法:\n");
+  printf("==================\n");
+  
+  int time = 0;
+  int completed = 0;
+  
+  while(completed < n) {
+    struct proc* current = schedule_from_multilevel(&mlq);
+    if(current == 0) break;
+    
+    int quantum = 0;
+    switch(current->queue_level) {
+      case 0: quantum = 2; break;  // High priority
+      case 1: quantum = 4; break;  // Medium priority
+      case 2: quantum = 8; break;  // Low priority
+    }
+    
+    printf("时间 %d: 进程 %d (类型: %d, 队列: %d) 开始执行\n", 
+           time, current->pid, current->proc_type, current->queue_level);
+    
+    // Simulate process execution
+    int execution_time = (current->remaining_time < quantum) ? 
+                        current->remaining_time : quantum;
+    current->remaining_time -= execution_time;
+    time += execution_time;
+    
+    printf("时间 %d: 进程 %d 执行了 %d 个时间单位\n", 
+           time, current->pid, execution_time);
+    
+    if(current->remaining_time <= 0) {
+      // Process completed
+      current->state = 2; // COMPLETED
+      completed++;
+      printf("时间 %d: 进程 %d 完成\n", time, current->pid);
+    } else {
+      // Process not completed, add back to queue
+      current->state = 0; // READY
+      current->remaining_time = quantum;
+      enqueue_to_level(&mlq, current, current->queue_level);
+      printf("时间 %d: 进程 %d 重新加入队列 %d\n", 
+             time, current->pid, current->queue_level);
+    }
+  }
+  
+  printf("==================\n");
+  printf("所有进程调度完成，总时间: %d\n", time);
 }

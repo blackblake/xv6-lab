@@ -177,6 +177,7 @@ mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
 .PRECIOUS: %.o
 
 UPROGS=\
+        $U/_hello\
 	$U/_cat\
 	$U/_echo\
 	$U/_forktest\
@@ -193,6 +194,14 @@ UPROGS=\
 	$U/_grind\
 	$U/_wc\
 	$U/_zombie\
+	$U/_test_syscalls\
+	$U/_priority_test\
+	$U/_priority_demo\
+	$U/_priority_demo_en\
+	$U/_simple_priority_test\
+	$U/_round_robin_test\
+	$U/_multilevel_queue_test\
+	$U/_perf_compare\
 
 
 

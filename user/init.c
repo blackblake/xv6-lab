@@ -2,12 +2,10 @@
 
 #include "kernel/types.h"
 #include "kernel/stat.h"
-#include "kernel/spinlock.h"
-#include "kernel/sleeplock.h"
-#include "kernel/fs.h"
-#include "kernel/file.h"
-#include "user/user.h"
-#include "kernel/fcntl.h"
+#include "kernel/fcntl.h"   // for O_RDWR
+#include "user/user.h"       // system call prototypes, printf, etc.
+
+#define CONSOLE 1 // device major for console (from kernel/file.h)
 
 char *argv[] = { "sh", 0 };
 
@@ -24,6 +22,7 @@ main(void)
   dup(0);  // stderr
 
   for(;;){
+    printf("Boot time (uptime): %d ticks\n", uptime());
     printf("init: starting sh\n");
     pid = fork();
     if(pid < 0){
